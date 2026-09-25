@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meadow Drift</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #2d4a2e;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  color: #f0e6d3;
+  overflow: hidden;
+}
+#wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+#hud {
+  display: flex;
+  gap: 32px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+#hud span { opacity: 0.9; }
+canvas {
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  cursor: none;
+}
+#overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(30,50,30,0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+}
+#overlay.hidden { display: none; }
+.panel {
+  background: #3a5c3b;
+  border-radius: 16px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.panel h1 {
+  font-size: 32px;
+  margin-bottom: 4px;
+  color: #a8d8a0;
+}
+.panel .subtitle {
+  font-size: 14px;
+  opacity: 0.7;
+  margin-bottom: 20px;
+}
+.panel h2 {
+  font-size: 24px;
+  margin-bottom: 16px;
+  color: #f5d88a;
+}
+.panel p {
+  margin: 8px 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.final-score {
+  font-size: 48px;
+  font-weight: 700;
+  color: #f5d88a;
+  margin: 12px 0;
+}
+.panel input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid #6a9a6b;
+  border-radius: 8px;
+  background: #2d4a2e;
+  color: #f0e6d3;
+  font-size: 16px;
+  outline: none;
+  margin: 8px 0;
+}
+.panel input:focus { border-color: #a8d8a0; }
+.btn {
+  display: inline-block;
+  padding: 10px 28px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 6px 4px;
+  transition: transform 0.1s;
+}
+.btn:active { transform: scale(0.96); }
+.btn-primary { background: #6a9a6b; color: #fff; }
+.btn-primary:hover { background: #7dba7e; }
+.btn-secondary { background: #4a6a4b; color: #ddd; }
+.btn-secondary:hover { background: #5a7a5b; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.scores-list {
+  text-align: left;
+  margin: 12px 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.scores-list ol {
+  padding-left: 24px;
+}
+.scores-list li {
+  padding: 3px 0;
+  font-size: 14px;
+}
+.scores-list li .sname { color: #a8d8a0; }
+.scores-list li .sval { color: #f5d88a; float: right; }
+.msg { font-size: 13px; margin-top: 8px; min-height: 20px; }
+.msg.error { color: #e8a0a0; }
+.msg.ok { color: #a8d8a0; }
+.instructions {
+  font-size: 13px;
+  opacity: 0.7;
+  margin-top: 6px;
+}
+</style>
+</head>
+<body>
+<div id="wrapper">
+  <div id="hud">
+    <span>🌸 <span id="scoreDisplay">0</span></span>
+    <span>💚 <span id="livesDisplay">3</span></span>
+    <span>⏱ <span id="timeDisplay">0s</span></span>
+  </div>
+  <canvas id="game" width="640" height="480"></canvas>
+</div>
+
+<div id="overlay">
+  <div class="panel" id="startPanel">
+    <h1>🌿 Meadow Drift</h1>
+    <p class="subtitle">A pleasant survivor</p>
+    <p>Guide your bunny through the meadow.<br>
+    Collect wildflowers 🌸 for points.<br>
+    Avoid the drifting rain clouds 🌧️.</p>
+    <p style="margin-top:12px; font-size:14px;">
+      <strong>Arrow keys</strong> or <strong>WASD</strong> to move
+    </p>
+    <br>
+    <button class="btn btn-primary" id="startBtn">Start Game</button>
+    <div id="startScores"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const scoreDisplay = document.getElementById('scoreDisplay');
+  const livesDisplay = document.getElementById('livesDisplay');
+  const timeDisplay = document.getElementById('timeDisplay');
+  const overlay = document.getElementById('overlay');
+  const startPanel = document.getElementById('startPanel');
+  const startBtn = document.getElementById('startBtn');
+  const startScoresDiv = document.getElementById('startScores');
+
+  const API_BASE = './api';
+
+  // --- Game state ---
+  let state = 'menu'; // menu, playing, gameover
+  let player, flowers, clouds, score, lives, elapsed, spawnTimer, difficulty;
+  let keys = {};
+  let animId = null;
+  let lastTime = 0;
+  let grassBlades = [];
+  let particles = [];
+
+  function initGrass() {
+    grassBlades = [];
+    for (let i = 0; i < 120; i++) {
+      grassBlades.push({
+        x: Math.random() * W,
+        y: H - Math.random() * 60,
+        h: 8 + Math.random() * 14,
+        sway: Math.random() * Math.PI * 2,
+        speed: 0.5 + Math.random() * 1.5
+      });
+    }
+  }
+
+  function resetGame() {
+    player = { x: W / 2, y: H / 2, r: 14, speed: 160, invincible: 0 };
+    flowers = [];
+    clouds = [];
+    particles = [];
+    score = 0;
+    lives = 3;
+    elapsed = 0;
+    spawnTimer = 0;
+    difficulty = 1;
+    scoreDisplay.textContent = '0';
+    livesDisplay.textContent = '3';
+    timeDisplay.textContent = '0s';
+    for (let i = 0; i < 5; i++) spawnFlower();
+  }
+
+  function spawnFlower() {
+    flowers.push({
+      x: 30 + Math.random() * (W - 60),
+      y: 30 + Math.random() * (H - 60),
+      r: 10,
+      hue: [340, 50, 280, 30, 310][Math.floor(Math.random() * 5)],
+      bob: Math.random() * Math.PI * 2
+    });
+  }
+
+  function spawnCloud() {
+    const side = Math.floor(Math.random() * 4);
+    let x, y, vx, vy;
+    const speed = 30 + difficulty * 12 + Math.random() * 20;
+    if (side === 0) { x = -40; y = Math.random() * H; vx = speed; vy = (Math.random() - 0.5) * speed * 0.5; }
+    else if (side === 1) { x = W + 40; y = Math.random() * H; vx = -speed; vy = (Math.random() - 0.5) * speed * 0.5; }
+    else if (side === 2) { x = Math.random() * W; y = -40; vx = (Math.random() - 0.5) * speed * 0.5; vy = speed; }
+    else { x = Math.random() * W; y = H + 40; vx = (Math.random() - 0.5) * speed * 0.5; vy = -speed; }
+    clouds.push({ x, y, vx, vy, w: 36 + Math.random() * 20, h: 22 + Math.random() * 10 });
+  }
+
+  function addParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 30 + Math.random() * 60;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.4 + Math.random() * 0.3,
+        maxLife: 0.4 + Math.random() * 0.3,
+        color,
+        r: 2 + Math.random() * 3
+      });
+    }
+  }
+
+  // --- Input ---
+  document.addEventListener('keydown', e => {
+    if (state === 'playing') {
+      const k = e.key.toLowerCase();
+      if (['arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)) {
+        e.preventDefault();
+      }
+    }
+    keys[e.key.toLowerCase()] = true;
+  });
+  document.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // --- Update ---
+  function update(dt) {
+    if (state !== 'playing') return;
+
+    elapsed += dt;
+    difficulty = 1 + Math.floor(elapsed / 10);
+    spawnTimer -= dt;
+
+    // Player movement
+    let dx = 0, dy = 0;
+    if (keys['arrowleft'] || keys['a']) dx -= 1;
+    if (keys['arrowright'] || keys['d']) dx += 1;
+    if (keys['arrowup'] || keys['w']) dy -= 1;
+    if (keys['arrowdown'] || keys['s']) dy += 1;
+    if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+    player.x += dx * player.speed * dt;
+    player.y += dy * player.speed * dt;
+    player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+    player.y = Math.max(player.r, Math.min(H - player.r, player.y));
+
+    if (player.invincible > 0) player.invincible -= dt;
+
+    // Flower collection
+    for (let i = flowers.length - 1; i >= 0; i--) {
+      const f = flowers[i];
+      f.bob += dt * 2;
+      const dist = Math.hypot(player.x - f.x, player.y - f.y);
+      if (dist < player.r + f.r) {
+        score += 10 + difficulty * 2;
+        addParticles(f.x, f.y, `hsl(${f.hue}, 80%, 70%)`, 6);
+        flowers.splice(i, 1);
+        spawnFlower();
+      }
+    }
+
+    // Cloud spawning
+    if (spawnTimer <= 0) {
+      spawnCloud();
+      spawnTimer = Math.max(0.4, 2.5 - difficulty * 0.15);
+    }
+
+    // Cloud movement + collision
+    for (let i = clouds.length - 1; i >= 0; i--) {
+      const c = clouds[i];
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      if (c.x < -80 || c.x > W + 80 || c.y < -80 || c.y > H + 80) {
+        clouds.splice(i, 1);
+        continue;
+      }
+      if (player.invincible <= 0) {
+        const cx = Math.max(c.x - c.w / 2, Math.min(c.x + c.w / 2, player.x));
+        const cy = Math.max(c.y - c.h / 2, Math.min(c.y + c.h / 2, player.y));
+        if (Math.hypot(player.x - cx, player.y - cy) < player.r) {
+          lives--;
+          player.invincible = 1.5;
+          addParticles(player.x, player.y, '#8ab8d8', 8);
+          if (lives <= 0) {
+            livesDisplay.textContent = '0';
+            scoreDisplay.textContent = score;
+            state = 'gameover';
+            showGameOver();
+            return;
+          }
+        }
+      }
+    }
+
+    // Particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Update HUD
+    scoreDisplay.textContent = score;
+    livesDisplay.textContent = lives;
+    timeDisplay.textContent = Math.floor(elapsed) + 's';
+  }
+
+  // --- Draw ---
+  function draw() {
+    // Sky gradient
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#87CEEB');
+    grad.addColorStop(0.6, '#b8e6b8');
+    grad.addColorStop(1, '#6aae6a');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Grass blades
+    ctx.strokeStyle = '#5a9a5a';
+    ctx.lineWidth = 2;
+    for (const g of grassBlades) {
+      g.sway += g.speed * 0.016;
+      const swayX = Math.sin(g.sway) * 4;
+      ctx.beginPath();
+      ctx.moveTo(g.x, g.y);
+      ctx.quadraticCurveTo(g.x + swayX, g.y - g.h * 0.6, g.x + swayX * 1.5, g.y - g.h);
+      ctx.stroke();
+    }
+
+    // Flowers
+    for (const f of flowers) {
+      const by = Math.sin(f.bob) * 3;
+      ctx.save();
+      ctx.translate(f.x, f.y + by);
+      // Petals
+      for (let i = 0; i < 5; i++) {
+        ctx.fillStyle = `hsl(${f.hue}, 70%, 75%)`;
+        const angle = (i / 5) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.ellipse(Math.cos(angle) * 7, Math.sin(angle) * 7, 5, 3, angle, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Center
+      ctx.fillStyle = '#f5d88a';
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Clouds (rain clouds — darker, with rain drops)
+    for (const c of clouds) {
+      ctx.fillStyle = 'rgba(100, 120, 140, 0.7)';
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, c.w / 2, c.h / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(c.x - c.w * 0.25, c.y - c.h * 0.2, c.w * 0.3, c.h * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(c.x + c.w * 0.25, c.y - c.h * 0.15, c.w * 0.25, c.h * 0.35, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Rain drops
+      ctx.strokeStyle = 'rgba(150, 190, 220, 0.5)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 3; i++) {
+        const rx = c.x - c.w * 0.3 + i * c.w * 0.3;
+        const ry = c.y + c.h * 0.5 + ((elapsed * 60 + i * 7) % 15);
+        ctx.beginPath();
+        ctx.moveTo(rx, ry);
+        ctx.lineTo(rx - 1, ry + 5);
+        ctx.stroke();
+      }
+    }
+
+    // Player (bunny)
+    if (state === 'playing' && player.invincible > 0 && Math.floor(player.invincible * 8) % 2 === 0) {
+      // Blink during invincibility
+    } else if (state === 'playing' || state === 'gameover') {
+      drawBunny(player.x, player.y);
+    }
+
+    // Particles
+    for (const p of particles) {
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * alpha, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBunny(x, y) {
+    ctx.save();
+    ctx.translate(x, y);
+    // Body
+    ctx.fillStyle = '#f0e0d0';
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 11, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Ears
+    ctx.fillStyle = '#f0e0d0';
+    ctx.beginPath();
+    ctx.ellipse(-5, -16, 4, 10, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(5, -16, 4, 10, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Inner ears
+    ctx.fillStyle = '#e8b0b0';
+    ctx.beginPath();
+    ctx.ellipse(-5, -15, 2, 6, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(5, -15, 2, 6, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Eyes
+    ctx.fillStyle = '#3a2a2a';
+    ctx.beginPath();
+    ctx.arc(-4, -2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(4, -2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Eye shine
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(-3, -3, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(5, -3, 1, 0, Math.PI * 2);
+    ctx.fill();
+    // Nose
+    ctx.fillStyle = '#e8a0a0';
+    ctx.beginPath();
+    ctx.ellipse(0, 1, 2, 1.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Cheeks
+    ctx.fillStyle = 'rgba(232, 176, 176, 0.3)';
+    ctx.beginPath();
+    ctx.arc(-8, 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(8, 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- Game loop ---
+  function gameLoop(timestamp) {
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+    update(dt);
+    draw();
+    animId = requestAnimationFrame(gameLoop);
+  }
+
+  // --- Screens ---
+  function showMenu() {
+    state = 'menu';
+    overlay.classList.remove('hidden');
+    startPanel.style.display = 'block';
+    loadScores(startScoresDiv);
+    initGrass();
+    draw();
+  }
+
+  function startGame() {
+    state = 'playing';
+    overlay.classList.add('hidden');
+    resetGame();
+    keys = {};
+    lastTime = performance.now();
+    if (animId) cancelAnimationFrame(animId);
+    animId = requestAnimationFrame(gameLoop);
+  }
+
+  function showGameOver() {
+    if (animId) { cancelAnimationFrame(animId); animId = null; }
+
+    overlay.classList.remove('hidden');
+    startPanel.style.display = 'none';
+
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.id = 'endPanel';
+    panel.innerHTML = `
+      <h2>Game Over</h2>
+      <div class="final-score">${score}</div>
+      <p>You survived ${Math.floor(elapsed)} seconds and collected ${score} flower points!</p>
+      <form id="scoreForm">
+        <input type="text" id="nameInput" placeholder="Your name" maxlength="30" autocomplete="off">
+        <div>
+          <button type="submit" class="btn btn-primary" id="saveBtn">Save Score</button>
+          <button type="button" class="btn btn-secondary" id="skipBtn">Play Again</button>
+        </div>
+        <div class="msg" id="saveMsg"></div>
+      </form>
+      <div id="endScores"></div>
+    `;
+    overlay.innerHTML = '';
+    overlay.appendChild(panel);
+
+    const scoreForm = document.getElementById('scoreForm');
+    const nameInput = document.getElementById('nameInput');
+    const saveBtn = document.getElementById('saveBtn');
+    const skipBtn = document.getElementById('skipBtn');
+    const saveMsg = document.getElementById('saveMsg');
+    const endScoresDiv = document.getElementById('endScores');
+
+    let saved = false;
+
+    loadScores(endScoresDiv);
+
+    nameInput.focus();
+
+    scoreForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (saved || saveBtn.disabled) return;
+
+      const name = nameInput.value.trim();
+      if (!name) {
+        saveMsg.textContent = 'Please enter your name.';
+        saveMsg.className = 'msg error';
+        return;
+      }
+
+      saveBtn.disabled = true;
+      saveMsg.textContent = 'Saving...';
+      saveMsg.className = 'msg';
+
+      try {
+        const res = await fetch(API_BASE + '/scores', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, score })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to save score.');
+        }
+        saved = true;
+        saveMsg.textContent = 'Score saved!';
+        saveMsg.className = 'msg ok';
+        saveBtn.disabled = true;
+        loadScores(endScoresDiv);
+      } catch (err) {
+        saveMsg.textContent = err.message;
+        saveMsg.className = 'msg error';
+        saveBtn.disabled = false;
+      }
+    });
+
+    skipBtn.addEventListener('click', () => {
+      overlay.innerHTML = '';
+      overlay.appendChild(startPanel);
+      showMenu();
+    });
+  }
+
+  async function loadScores(container) {
+    try {
+      const res = await fetch(API_BASE + '/scores');
+      const data = await res.json();
+      if (data.length === 0) {
+        container.innerHTML = '<p style="opacity:0.6;margin-top:12px;font-size:13px;">No scores yet. Be the first!</p>';
+        return;
+      }
+      let html = '<div class="scores-list"><h2 style="font-size:16px;margin-bottom:6px;">🏆 High Scores</h2><ol>';
+      for (const s of data) {
+        html += `<li><span class="sname">${escapeHtml(s.name)}</span> <span class="sval">${s.score}</span></li>`;
+      }
+      html += '</ol></div>';
+      container.innerHTML = html;
+    } catch {
+      container.innerHTML = '<p style="opacity:0.5;font-size:13px;">Could not load scores.</p>';
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // --- Start ---
+  startBtn.addEventListener('click', startGame);
+  document.addEventListener('keydown', (e) => {
+    if (state === 'menu' && (e.key === 'Enter' || e.key === ' ')) {
+      const active = document.activeElement;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'BUTTON' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
+      startGame();
+    }
+  });
+
+  initGrass();
+  showMenu();
+  lastTime = performance.now();
+  animId = requestAnimationFrame(gameLoop);
+})();
+</script>
+</body>
+</html>
